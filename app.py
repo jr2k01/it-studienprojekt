@@ -4,6 +4,14 @@ from mistralai.models.chat_completion import ChatMessage
 from datetime import date, timedelta
 import base64
 
+# Füge diese Funktion am Anfang deiner app.py ein
+def reset_process():
+    """Setzt alle relevanten Session-State-Variablen zurück."""
+    keys_to_reset = ["bescheid_datum", "frist_ende", "uploaded_files", "widerspruchstext", "messages", "file_uploader"]
+    for key in keys_to_reset:
+        if key in st.session_state:
+            del st.session_state[key]
+
 # --- GRUNDKONFIGURATION -----------------------------------------------------
 st.set_page_config(
     page_title="Widerspruchs-Assistent Pflegegrad",
@@ -136,13 +144,7 @@ with tab4:
     st.balloons()
     st.success("Sie haben alle Informationen gesammelt!")
     st.markdown("Überprüfen Sie Ihren Widerspruchstext und senden Sie ihn **unterschrieben und fristgerecht per Einschreiben** an Ihre Pflegekasse.")
-    if st.button("Prozess neu starten"):
-        # Setzt alle Daten zurück, um von vorne zu beginnen
-        keys_to_reset = ["bescheid_datum", "frist_ende", "uploaded_files", "widerspruchstext", "messages"]
-        for key in keys_to_reset:
-            if key in st.session_state:
-                del st.session_state[key]
-        st.rerun()
+    st.button("Prozess neu starten", on_click=reset_process)
 
 st.markdown('</div>', unsafe_allow_html=True) # Ende des scrollbaren Hauptbereichs
 
