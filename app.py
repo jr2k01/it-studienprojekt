@@ -16,7 +16,7 @@ st.set_page_config(
 try:
     MISTRAL_API_KEY = st.secrets["MISTRAL_API_KEY"]
 except (KeyError, FileNotFoundError):
-    MISTRAL_API_KEY = "DEIN_LOKALER_API_SCHLÜSSEL_HIER"
+    MISTRAL_API_KEY = "UZtiS57vajTq0Gj9kJbQGJeVldLxV6Bn"
 
 # --- INITIALISIERUNG DES SESSION STATE --------------------------------------
 # Hier speichern wir alle Daten des Nutzers während der Sitzung
