@@ -12,6 +12,11 @@ import streamlit as st # Streamlit muss für st.secrets importiert sein
 
 # --- 1. GRUNDEINSTELLUNGEN & INITIALISIERUNG ---
 
+try:
+    MISTRAL_API_KEY = st.secrets["MISTRAL_API_KEY"]
+except (KeyError, FileNotFoundError):
+    MISTRAL_API_KEY = "UZtiS57vajTq0Gj9kJbQGJeVldLxV6Bn"
+
 # Hole den API-Schlüssel aus den Streamlit/GitHub Secrets
 # Diese Methode funktioniert sowohl lokal (wenn in .streamlit/secrets.toml) als auch auf Streamlit Cloud
 api_key = st.secrets.get("MISTRAL_API_KEY")
