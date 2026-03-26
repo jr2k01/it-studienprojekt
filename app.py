@@ -1,16 +1,24 @@
 import streamlit as st
 from streamlit_calendar import calendar
 import datetime
-from dotenv import load_dotenv
 import os
 from mistralai.client import MistralClient
 from mistralai.models.chat_completion import ChatMessage
 import PyPDF2
 
+# NEUER Code für GitHub Secrets (und lokale Entwicklung, wenn Variable gesetzt)
+import os
+import streamlit as st # Streamlit muss für st.secrets importiert sein
+
 # --- 1. GRUNDEINSTELLUNGEN & INITIALISIERUNG ---
 
-# Lade Umgebungsvariablen (für den API-Schlüssel)
-load_dotenv()
+# Hole den API-Schlüssel aus den Streamlit/GitHub Secrets
+# Diese Methode funktioniert sowohl lokal (wenn in .streamlit/secrets.toml) als auch auf Streamlit Cloud
+api_key = st.secrets.get("MISTRAL_API_KEY")
+
+# Fallback für andere Umgebungen (z.B. GitHub Actions)
+if not api_key:
+    api_key = os.getenv("MISTRAL_API_KEY")
 
 # Konfiguriere die Streamlit-Seite
 st.set_page_config(
@@ -20,10 +28,6 @@ st.set_page_config(
 )
 
 # Initialisiere den Mistral AI Client
-api_key = os.getenv("MISTRAL_API_KEY")
-if not api_key:
-    st.error("Mistral API-Schlüssel nicht gefunden. Bitte in .env Datei eintragen.")
-    st.stop()
 model = "mistral-large-latest"  # Oder ein anderes Modell deiner Wahl
 client = MistralClient(api_key=api_key)
 
