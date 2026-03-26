@@ -12,18 +12,20 @@ import streamlit as st # Streamlit muss für st.secrets importiert sein
 
 # --- 1. GRUNDEINSTELLUNGEN & INITIALISIERUNG ---
 
-try:
-    MISTRAL_API_KEY = st.secrets["MISTRAL_API_KEY"]
-except (KeyError, FileNotFoundError):
-    MISTRAL_API_KEY = "UZtiS57vajTq0Gj9kJbQGJeVldLxV6Bn"
-
-# Hole den API-Schlüssel aus den Streamlit/GitHub Secrets
-# Diese Methode funktioniert sowohl lokal (wenn in .streamlit/secrets.toml) als auch auf Streamlit Cloud
+# Versuche, den Schlüssel aus den Streamlit Secrets zu laden (für Deployment)
 api_key = st.secrets.get("MISTRAL_API_KEY")
 
-# Fallback für andere Umgebungen (z.B. GitHub Actions)
+# Fallback auf Umgebungsvariablen (für GitHub Codespaces/Actions)
 if not api_key:
     api_key = os.getenv("MISTRAL_API_KEY")
+
+# **WICHTIGE PRÜFUNG HINZUFÜGEN**
+if not api_key:
+    st.error("Mistral API-Schlüssel nicht gefunden! Bitte konfiguriere das 'MISTRAL_API_KEY' Secret in den Einstellungen deiner App.")
+    st.stop() # App anhalten, wenn kein Schlüssel da ist
+
+# Initialisiere den Mistral Client
+client = MistralClient(api_key=api_key)
 
 # Konfiguriere die Streamlit-Seite
 st.set_page_config(
