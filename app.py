@@ -1,201 +1,264 @@
 import streamlit as st
+from streamlit_calendar import calendar
+import datetime
+from dotenv import load_dotenv
+import os
 from mistralai.client import MistralClient
 from mistralai.models.chat_completion import ChatMessage
-from datetime import date, timedelta
+import PyPDF2
 
-# --- GRUNDKONFIGURATION -----------------------------------------------------
+# --- 1. GRUNDEINSTELLUNGEN & INITIALISIERUNG ---
 
-# App-Konfiguration für eine breitere Ansicht
+# Lade Umgebungsvariablen (für den API-Schlüssel)
+load_dotenv()
+
+# Konfiguriere die Streamlit-Seite
 st.set_page_config(
-    page_title="Widerspruchs-Assistent Pflegegrad",
-    page_icon="⚖️",
+    page_title="Pflegegrad Widerspruchs-Assistent",
+    page_icon="🛡️",
     layout="wide"
 )
 
-# Lade API-Key sicher (funktioniert lokal und auf dem Server)
-try:
-    MISTRAL_API_KEY = st.secrets["MISTRAL_API_KEY"]
-except (KeyError, FileNotFoundError):
-    MISTRAL_API_KEY = "UZtiS57vajTq0Gj9kJbQGJeVldLxV6Bn" # Für lokale Entwicklung
-
-# Definiere die Prozessschritte
-PROZESS_SCHRITTE = [
-    "1. Start & Fristberechnung",
-    "2. Dokumente sammeln",
-    "3. Widerspruch formulieren",
-    "4. Abschluss & Versand"
-]
-
-# Initialisiere den "Session State", um Daten über Interaktionen hinweg zu speichern
-if 'prozess_schritt' not in st.session_state:
-    st.session_state.prozess_schritt = 0
-if 'bescheid_datum' not in st.session_state:
-    st.session_state.bescheid_datum = None
-if 'frist_ende' not in st.session_state:
-    st.session_state.frist_ende = None
-if 'hochgeladene_dateien' not in st.session_state:
-    st.session_state.hochgeladene_dateien = []
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+# Initialisiere den Mistral AI Client
+api_key = os.getenv("MISTRAL_API_KEY")
+if not api_key:
+    st.error("Mistral API-Schlüssel nicht gefunden. Bitte in .env Datei eintragen.")
+    st.stop()
+model = "mistral-large-latest"  # Oder ein anderes Modell deiner Wahl
+client = MistralClient(api_key=api_key)
 
 
-# --- SEITENLEISTE (Sidebar) für Navigation & Fortschritt --------------------
+# --- 2. FUNKTIONEN FÜR DIE APP-LOGIK ---
 
-with st.sidebar:
-    st.title("Navigation")
-    st.write("Ihr Fortschritt im Widerspruchsprozess.")
+def get_fristen_info(ablehnungsdatum):
+    """Berechnet wichtige Fristen basierend auf dem Ablehnungsdatum."""
+    if ablehnungsdatum:
+        widerspruchsfrist = ablehnungsdatum + datetime.timedelta(days=30)
+        return {
+            "Widerspruchsfrist endet am": widerspruchsfrist,
+            "Empfehlung: Widerspruch einreichen bis": ablehnungsdatum + datetime.timedelta(days=25),
+            "Empfehlung: Pflegetagebuch abschließen bis": ablehnungsdatum + datetime.timedelta(days=20),
+        }
+    return {}
 
-    # **FEATURE: FORTSCHRITTSBALKEN**
-    # Berechnet den Fortschritt in Prozent
-    fortschritt_prozent = int((st.session_state.prozess_schritt / (len(PROZESS_SCHRITTE) - 1)) * 100)
-    st.progress(fortschritt_prozent)
+def read_pdf(file):
+    """Liest den Text aus einer hochgeladenen PDF-Datei."""
+    try:
+        pdf_reader = PyPDF2.PdfReader(file)
+        text = ""
+        for page in pdf_reader.pages:
+            text += page.extract_text() or ""
+        return text
+    except Exception as e:
+        return f"Fehler beim Lesen der PDF-Datei: {e}"
+
+def ask_mistral(user_question, context=""):
+    """Sendet eine Frage an die Mistral AI und gibt die Antwort zurück."""
+    system_prompt = (
+        "Du bist ein hilfreicher und einfühlsamer KI-Assistent. Deine Aufgabe ist es, "
+        "Nutzer durch den Widerspruchsprozess für einen Pflegegrad in Deutschland zu führen. "
+        "Antworte klar, strukturiert und verständlich. Gib keine Rechtsberatung, sondern nur "
+        "allgemeine Informationen und Unterstützung. Wenn du auf Basis eines Dokuments antwortest, "
+        "beziehe dich klar darauf."
+    )
     
-    # Zeigt den aktuellen Schritt an
-    st.markdown(f"**Aktueller Schritt:**")
-    st.info(f"{PROZESS_SCHRITTE[st.session_state.prozess_schritt]}")
-    st.markdown("---")
+    messages = [ChatMessage(role="system", content=system_prompt)]
+    
+    if context:
+        full_question = f"Basierend auf dem folgenden Dokumentkontext:\n---\n{context}\n---\nBeantworte diese Frage: {user_question}"
+        messages.append(ChatMessage(role="user", content=full_question))
+    else:
+        messages.append(ChatMessage(role="user", content=user_question))
 
-    # **FEATURE: KALENDER MIT FRISTEN**
-    st.subheader("Ihre Fristen")
-    if st.session_state.frist_ende:
-        st.date_input(
-            "Widerspruchsfrist endet am:",
-            value=st.session_state.frist_ende,
-            disabled=True # Nur zur Anzeige, nicht änderbar
-        )
-        tage_verbleibend = (st.session_state.frist_ende - date.today()).days
-        if tage_verbleibend >= 0:
-            st.success(f"Sie haben noch {tage_verbleibend} Tage Zeit.")
+    try:
+        chat_response = client.chat(model=model, messages=messages)
+        return chat_response.choices[0].message.content
+    except Exception as e:
+        return f"Ein Fehler ist bei der Kommunikation mit der KI aufgetreten: {e}"
+
+# --- 3. SESSION STATE INITIALISIERUNG (Daten zwischen Interaktionen speichern) ---
+
+if 'process_started' not in st.session_state:
+    st.session_state.process_started = False
+if 'ablehnungsdatum' not in st.session_state:
+    st.session_state.ablehnungsdatum = None
+if 'chat_history' not in st.session_state:
+    st.session_state.chat_history = []
+if 'uploaded_docs' not in st.session_state:
+    st.session_state.uploaded_docs = {}
+
+
+# --- 4. AUFBAU DER STREAMLIT-OBERFLÄCHE ---
+
+st.title("🛡️ Dein Assistent für den Pflegegrad-Widerspruch")
+st.markdown("Wir führen dich Schritt für Schritt durch den Prozess. Einfach, klar und strukturiert.")
+
+# --- ANSICHT 1: STARTBILDSCHIRM ---
+if not st.session_state.process_started:
+    st.header("Schritt 1: Prozess starten und Fristen setzen")
+    st.info(
+        "Der Widerspruch muss in der Regel **innerhalb eines Monats** nach Erhalt des "
+        "Ablehnungsbescheids bei der Pflegekasse eingehen. Trage hier das Datum ein, "
+        "an dem du den Bescheid erhalten hast."
+    )
+    
+    # Datumseingabe
+    selected_date = st.date_input(
+        "Datum des Ablehnungsbescheids:",
+        value=None, # Standardwert None, damit es klar ist, dass nichts ausgewählt wurde
+        min_value=datetime.date.today() - datetime.timedelta(days=365),
+        max_value=datetime.date.today(),
+        help="Wähle das Datum, an dem du den Brief von der Pflegekasse erhalten hast."
+    )
+
+    if st.button("Prozess starten", type="primary"):
+        if selected_date:
+            st.session_state.ablehnungsdatum = selected_date
+            st.session_state.process_started = True
+            st.rerun() # Seite neu laden, um die Hauptansicht anzuzeigen
         else:
-            st.error("Die Frist ist bereits abgelaufen!")
-    else:
-        st.write("Noch keine Frist berechnet.")
+            st.warning("Bitte wähle zuerst das Datum des Ablehnungsbescheids aus.")
 
-    st.markdown("---")
-    st.warning("Dieser Assistent ersetzt keine Rechtsberatung.")
-
-# --- HAUPTBEREICH mit den einzelnen Prozessschritten ----------------------
-
-st.title("Widerspruchs-Assistent Pflegegrad")
-
-# === SCHRITT 1: START & FRISTBERECHNUNG =====================================
-if st.session_state.prozess_schritt == 0:
-    st.header(PROZESS_SCHRITTE[0])
-    st.write("Bitte geben Sie das Datum ein, das auf Ihrem Pflegegrad-Bescheid steht. Daraus berechnen wir die gesetzliche Widerspruchsfrist.")
-
-    bescheid_datum_input = st.date_input("Datum des Bescheids", value=st.session_state.get('bescheid_datum', date.today()))
-
-    if st.button("Frist berechnen und Prozess starten"):
-        st.session_state.bescheid_datum = bescheid_datum_input
-        # Berechnung der Frist (vereinfacht: 1 Monat + 3 Tage Zustellfiktion)
-        zugangs_datum = st.session_state.bescheid_datum + timedelta(days=3)
-        # Bessere Monatsberechnung (z.B. 15. März -> 15. April)
-        try:
-            frist_monat = zugangs_datum.month % 12 + 1
-            frist_jahr = zugangs_datum.year + (1 if zugangs_datum.month == 12 else 0)
-            st.session_state.frist_ende = zugangs_datum.replace(month=frist_monat, year=frist_jahr)
-        except ValueError: # Bei Monatsenden wie 31.
-            st.session_state.frist_ende = zugangs_datum.replace(month=frist_monat, day=1, year=frist_jahr) - timedelta(days=1)
+# --- ANSICHT 2: HAUPTANSICHT NACH PROZESSSTART ---
+else:
+    # --- Linke Seitenleiste für Navigation und Status ---
+    with st.sidebar:
+        st.header("Dein Status")
         
-        st.session_state.prozess_schritt = 1
-        st.rerun() # App neu laden, um zum nächsten Schritt zu springen
+        # Fristen anzeigen
+        fristen = get_fristen_info(st.session_state.ablehnungsdatum)
+        st.write(f"Bescheid vom: **{st.session_state.ablehnungsdatum.strftime('%d.%m.%Y')}**")
+        
+        widerspruchsfrist_ende = fristen.get("Widerspruchsfrist endet am")
+        if widerspruchsfrist_ende:
+            tage_verbleibend = (widerspruchsfrist_ende - datetime.date.today()).days
+            st.metric(
+                label="Tage bis Fristende für Widerspruch",
+                value=f"{tage_verbleibend} Tage",
+                delta=f"Frist endet am {widerspruchsfrist_ende.strftime('%d.%m.%Y')}",
+                delta_color="inverse" if tage_verbleibend > 10 else ("off" if tage_verbleibend <= 0 else "normal")
+            )
 
-# === SCHRITT 2: DOKUMENTE SAMMELN ==========================================
-elif st.session_state.prozess_schritt == 1:
-    st.header(PROZESS_SCHRITTE[1])
-    st.write("Laden Sie hier alle relevanten Dokumente hoch. Wichtig sind vor allem der **Pflegegrad-Bescheid** und das **MD-Gutachten**.")
+        st.divider()
 
-    # **FEATURE: DATEI-UPLOAD**
-    uploaded_files = st.file_uploader(
-        "Dokumente hochladen (PDF, JPG, PNG)",
-        type=["pdf", "jpg", "png", "jpeg"],
-        accept_multiple_files=True
-    )
+        # Dokumenten-Upload
+        st.header("Dokumente verwalten")
+        uploaded_file = st.file_uploader(
+            "Lade Dokumente hoch (PDF)",
+            type="pdf",
+            accept_multiple_files=False, # Erstmal nur eine Datei zur Vereinfachung
+            key="file_uploader"
+        )
+        if uploaded_file:
+            if uploaded_file.name not in st.session_state.uploaded_docs:
+                with st.spinner(f"Lese '{uploaded_file.name}'..."):
+                    text = read_pdf(uploaded_file)
+                    st.session_state.uploaded_docs[uploaded_file.name] = text
+                    st.success(f"'{uploaded_file.name}' wurde erfolgreich geladen.")
+        
+        # Anzeige der hochgeladenen Dokumente
+        if st.session_state.uploaded_docs:
+            st.write("Hochgeladene Dokumente:")
+            for doc_name in st.session_state.uploaded_docs.keys():
+                st.info(f"📄 {doc_name}")
+        
+        st.divider()
+        if st.button("Prozess neu starten"):
+            # Alle Session-Daten zurücksetzen
+            for key in st.session_state.keys():
+                del st.session_state[key]
+            st.rerun()
+
+    # --- Hauptbereich mit Tabs ---
+    tab1, tab2, tab3 = st.tabs(["Schritt-für-Schritt Anleitung", "Kalender", "Chat-Assistent"])
+
+    with tab1:
+        st.header("Schritt-für-Schritt durch den Widerspruch")
+        st.markdown("""
+        Hier ist dein Fahrplan. Arbeite die Punkte nacheinander ab.
+        
+        - **Schritt 1: Fristwahrender Widerspruch (SOFORT)**
+          - **Was?** Ein kurzes Schreiben an die Pflegekasse, in dem du formlos mitteilst: "Hiermit lege ich Widerspruch gegen den Bescheid vom [Datum des Bescheids] ein. Eine ausführliche Begründung reiche ich nach."
+          - **Warum?** Damit verpasst du die wichtige 1-Monats-Frist nicht!
+          - **Erledigt?**
+        
+        - **Schritt 2: Unterlagen sammeln (ca. 1-2 Wochen)**
+          - **Was?** Sammle alle relevanten Dokumente:
+            - Ärztliche Atteste, Berichte, Gutachten
+            - Pflegetagebuch (sehr wichtig!)
+            - Liste der benötigten Hilfsmittel
+          - **Tipp:** Lade die Dokumente hier in der App hoch, um sie vom Chatbot analysieren zu lassen.
+          - **Erledigt?**
+        
+        - **Schritt 3: Begründung formulieren (ca. 1 Woche)**
+          - **Was?** Schreibe die ausführliche Begründung für deinen Widerspruch. Beschreibe genau, warum die Ablehnung oder die Einstufung falsch ist.
+          - **Hilfe:** Nutze den Chat-Assistenten! Frage z.B.: "Hilf mir, eine Begründung zu formulieren. Mein Pflegetagebuch zeigt, dass ich Hilfe beim Anziehen brauche."
+          - **Erledigt?**
+
+        - **Schritt 4: Begründung abschicken**
+          - **Was?** Schicke die ausführliche Begründung per Einschreiben an die Pflegekasse.
+          - **Wichtig:** Hebe den Sendebeleg gut auf!
+          - **Erledigt?**
+        """)
     
-    if uploaded_files:
-        st.session_state.hochgeladene_dateien = uploaded_files
-        st.success(f"{len(uploaded_files)} Datei(en) erfolgreich zur Kenntnis genommen.")
-        for file in uploaded_files:
-            st.write(f"- {file.name} ({round(file.size/1024)} KB)")
+    with tab2:
+        st.header("Dein Fristenkalender")
+        
+        # Kalender-Events erstellen
+        calendar_events = []
+        for name, datum in fristen.items():
+            calendar_events.append({
+                "title": name,
+                "start": datum.isoformat(),
+                "end": datum.isoformat(),
+                "allDay": True, # Ganztägiges Event
+                "color": "red" if "endet" in name else "orange"
+            })
+            
+        calendar_options = {
+            "headerToolbar": {
+                "left": "today prev,next",
+                "center": "title",
+                "right": "dayGridMonth,timeGridWeek"
+            },
+            "initialDate": st.session_state.ablehnungsdatum.isoformat(),
+            "initialView": "dayGridMonth"
+        }
 
-    if st.button("Weiter zum Widerspruchstext"):
-        st.session_state.prozess_schritt = 2
-        st.rerun()
+        # Kalender anzeigen
+        calendar(events=calendar_events, options=calendar_options)
 
-# === SCHRITT 3: WIDERSPRUCH FORMULIEREN (Dein Chatbot) ======================
-elif st.session_state.prozess_schritt == 2:
-    st.header(PROZESS_SCHRITTE[2])
-    st.write("Nutzen Sie den KI-Assistenten, um Ihren Widerspruch zu formulieren. Beschreiben Sie, was Ihrer Meinung nach falsch bewertet wurde.")
-    
-    # Der Chatbot-Code, den du bereits kennst
-    for message in st.session_state.messages:
-        with st.chat_message(message.role):
-            st.markdown(message.content)
+    with tab3:
+        st.header("Dein persönlicher Chat-Assistent")
+        st.info("Stelle hier deine Fragen zum Prozess oder zu deinen hochgeladenen Dokumenten.")
 
-    if user_prompt := st.chat_input("Beschreiben Sie Ihr Anliegen..."):
-        st.session_state.messages.append(ChatMessage(role="user", content=user_prompt))
-        with st.chat_message("user"):
-            st.markdown(user_prompt)
+        # Chat-Verlauf anzeigen
+        for message in st.session_state.chat_history:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+        
+        # Nutzereingabe
+        prompt = st.chat_input("Deine Frage an den Assistenten...")
+        if prompt:
+            # Eingabe des Nutzers zum Verlauf hinzufügen und anzeigen
+            st.session_state.chat_history.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
 
-        with st.chat_message("assistant"):
-            message_placeholder = st.empty()
-            try:
-                client = MistralClient(api_key=MISTRAL_API_KEY)
-                system_prompt = ChatMessage(
-                    role="system",
-                    content=(
-                        "Du bist ein Experte für Pflegegrad-Widersprüche. Hilf dem Nutzer, einen sachlichen und gut begründeten Widerspruchstext zu formulieren. "
-                        "Frage gezielt nach, welche Punkte aus dem MD-Gutachten strittig sind (z.B. Mobilität, Anziehen, Essen). "
-                        "Gib konkrete Formulierungsvorschläge. Deine Rolle ist es, den Nutzer zu befähigen, seinen Fall klar darzulegen."
-                    )
-                )
-                messages_for_api = [system_prompt] + st.session_state.messages
-                
-                chat_response = client.chat(model="mistral-small-latest", messages=messages_for_api)
-                full_response = chat_response.choices[0].message.content
-                message_placeholder.markdown(full_response)
-                
-            except Exception as e:
-                full_response = "Entschuldigung, es ist ein technischer Fehler aufgetreten."
-                st.error(e)
-
-            st.session_state.messages.append(ChatMessage(role="assistant", content=full_response))
-
-    if st.button("Widerspruch ist fertig, weiter zum Abschluss"):
-        st.session_state.prozess_schritt = 3
-        st.rerun()
-
-# === SCHRITT 4: ABSCHLUSS & VERSAND ========================================
-elif st.session_state.prozess_schritt == 3:
-    st.header(PROZESS_SCHRITTE[3])
-    st.balloons()
-    st.success("Herzlichen Glückwunsch, Sie haben fast alle Schritte abgeschlossen!")
-    st.write("Hier ist eine Zusammenfassung Ihrer Daten:")
-
-    st.subheader("Eingegebene Daten")
-    st.write(f"- Datum des Bescheids: {st.session_state.bescheid_datum.strftime('%d.%m.%Y')}")
-    st.write(f"- Widerspruchsfrist endet am: {st.session_state.frist_ende.strftime('%d.%m.%Y')}")
-
-    st.subheader("Hochgeladene Dokumente")
-    if st.session_state.hochgeladene_dateien:
-        for file in st.session_state.hochgeladene_dateien:
-            st.write(f"- {file.name}")
-    else:
-        st.write("Keine Dokumente hochgeladen.")
-
-    st.subheader("Ihr Widerspruchstext (Auszug)")
-    # Zeigt den letzten vom Nutzer eingegebenen Text als Beispiel
-    user_messages = [m.content for m in st.session_state.messages if m.role == 'user']
-    if user_messages:
-        st.text_area("Ihr Text:", value=user_messages[-1], height=200, disabled=True)
-
-    st.warning(
-        "**Nächste Schritte:** Senden Sie den von Ihnen formulierten Widerspruch **unterschrieben per Einschreiben** an Ihre Pflegekasse. "
-        "Halten Sie unbedingt die Frist ein!"
-    )
-    
-    if st.button("Prozess neu starten"):
-        # Setzt alles zurück
-        for key in st.session_state.keys():
-            del st.session_state[key]
-        st.rerun()
+            # Kontext aus Dokumenten für die KI vorbereiten
+            context = ""
+            if st.session_state.uploaded_docs:
+                context += "Folgende Dokumente wurden hochgeladen:\n"
+                for name, text in st.session_state.uploaded_docs.items():
+                    # Nur einen Ausschnitt des Textes verwenden, um das Token-Limit nicht zu sprengen
+                    summary = (text[:2000] + '...') if len(text) > 2000 else text
+                    context += f"\n--- Dokument: {name} ---\n{summary}\n"
+            
+            # KI-Antwort generieren und anzeigen
+            with st.chat_message("assistant"):
+                with st.spinner("Ich denke nach..."):
+                    response = ask_mistral(prompt, context)
+                    st.markdown(response)
+            
+            # KI-Antwort zum Verlauf hinzufügen
+            st.session_state.chat_history.append({"role": "assistant", "content": response})
