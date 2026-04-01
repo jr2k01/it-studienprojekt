@@ -503,3 +503,7 @@ Mit freundlichen Grüßen
 
         st.success("✅ Entwurf erstellt! Bitte prüfe den Text sorgfältig, ergänze fehlende Angaben und lasse ihn ggf. von einem Pflegeberater prüfen.")
         st.warning("⚠️ Denk daran: Der Brief muss **innerhalb von 4 Wochen** nach Erhalt des Bescheids eingereicht werden!")
+
+
+        st.success("✅ Entwurf erstellt! Bitte prüfe den Text sorgfältig, ergänze fehlende Angaben und lasse ihn ggf. von einem Pflegeberater prüfen.")
+        st.warning("⚠️ Denk daran: Der Brief muss **innerhalb von 4 Wochen** nach Erhalt des Bescheids eingereicht werden!")
